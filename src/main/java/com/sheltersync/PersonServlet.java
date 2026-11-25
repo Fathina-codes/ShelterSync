@@ -24,22 +24,43 @@ public class PersonServlet extends HttpServlet {
                 int pid = Integer.parseInt(req.getParameter("id"));
                 con.setAutoCommit(false);
                 try {
-                    int sid = 0;
+                    Integer sid = null;
                     try (PreparedStatement ps = con.prepareStatement(
-                            "SELECT shelter_id FROM affected_person WHERE person_id=?")) {
+                            "SELECT shelter_id FROM affected_person WHERE person_id=? FOR UPDATE")) {
                         ps.setInt(1, pid);
-                        ResultSet rs = ps.executeQuery();
-                        if (rs.next()) sid = rs.getInt(1);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) sid = rs.getInt(1);
+                        }
                     }
-                    try (PreparedStatement ps = con.prepareStatement(
-                            "DELETE FROM affected_person WHERE person_id=?")) {
-                        ps.setInt(1, pid);
-                        ps.executeUpdate();
-                    }
-                    try (PreparedStatement ps = con.prepareStatement(
-                            "UPDATE shelter SET occupancy = occupancy - 1 WHERE shelter_id=? AND occupancy > 0")) {
-                        ps.setInt(1, sid);
-                        ps.executeUpdate();
+
+                    if (sid != null) {
+                        try (PreparedStatement ps = con.prepareStatement(
+                                "SELECT shelter_id FROM shelter WHERE shelter_id=? FOR UPDATE")) {
+                            ps.setInt(1, sid);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                if (!rs.next()) {
+                                    throw new SQLException("Shelter not found for affected person " + pid);
+                                }
+                            }
+                        }
+
+                        int removed;
+                        try (PreparedStatement ps = con.prepareStatement(
+                                "DELETE FROM affected_person WHERE person_id=?")) {
+                            ps.setInt(1, pid);
+                            removed = ps.executeUpdate();
+                        }
+
+                        if (removed > 0) {
+                            try (PreparedStatement ps = con.prepareStatement(
+                                    "UPDATE shelter SET occupancy = " +
+                                    "(SELECT COUNT(*) FROM affected_person WHERE shelter_id=?) " +
+                                    "WHERE shelter_id=?")) {
+                                ps.setInt(1, sid);
+                                ps.setInt(2, sid);
+                                ps.executeUpdate();
+                            }
+                        }
                     }
                     con.commit();
                 } catch (SQLException e) {
@@ -51,7 +72,9 @@ public class PersonServlet extends HttpServlet {
             }
 
             req.setAttribute("shelters", DBConnection.query(con,
-                "SELECT shelter_id, name, capacity, occupancy FROM shelter"));
+                "SELECT s.shelter_id, s.name, s.capacity, COUNT(p.person_id) AS occupancy " +
+                "FROM shelter s LEFT JOIN affected_person p ON s.shelter_id = p.shelter_id " +
+                "GROUP BY s.shelter_id, s.name, s.capacity ORDER BY s.shelter_id"));
             req.setAttribute("persons", DBConnection.query(con,
                 "SELECT p.*, s.name AS shelter FROM affected_person p " +
                 "JOIN shelter s ON p.shelter_id = s.shelter_id ORDER BY p.person_id DESC"));
@@ -69,14 +92,25 @@ public class PersonServlet extends HttpServlet {
         try (Connection con = DBConnection.getConnection()) {
             con.setAutoCommit(false);
             try {
-                boolean hasRoom;
+                int capacity = -1;
                 try (PreparedStatement ps = con.prepareStatement(
-                        "SELECT capacity, occupancy FROM shelter WHERE shelter_id=? FOR UPDATE")) {
+                        "SELECT capacity FROM shelter WHERE shelter_id=? FOR UPDATE")) {
                     ps.setInt(1, sid);
-                    ResultSet rs = ps.executeQuery();
-                    hasRoom = rs.next() && rs.getInt("occupancy") < rs.getInt("capacity");
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) capacity = rs.getInt("capacity");
+                    }
                 }
 
+                int occupancy = 0;
+                try (PreparedStatement ps = con.prepareStatement(
+                        "SELECT COUNT(*) FROM affected_person WHERE shelter_id=?")) {
+                    ps.setInt(1, sid);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) occupancy = rs.getInt(1);
+                    }
+                }
+
+                boolean hasRoom = capacity >= 0 && occupancy < capacity;
                 if (!hasRoom) {                       // capacity check
                     con.rollback();
                     req.setAttribute("error", "This shelter is full. Please choose another shelter.");
@@ -94,8 +128,10 @@ public class PersonServlet extends HttpServlet {
                     ps.executeUpdate();
                 }
                 try (PreparedStatement ps = con.prepareStatement(
-                        "UPDATE shelter SET occupancy = occupancy + 1 WHERE shelter_id=?")) {
+                        "UPDATE shelter SET occupancy = " +
+                        "(SELECT COUNT(*) FROM affected_person WHERE shelter_id=?) WHERE shelter_id=?")) {
                     ps.setInt(1, sid);
+                    ps.setInt(2, sid);
                     ps.executeUpdate();
                 }
                 con.commit();

@@ -22,17 +22,18 @@ public class DashboardServlet extends HttpServlet {
                 "SELECT " +
                 "(SELECT COUNT(*) FROM shelter) AS shelters, " +
                 "(SELECT COALESCE(SUM(capacity),0) FROM shelter) AS capacity, " +
-                "(SELECT COALESCE(SUM(occupancy),0) FROM shelter) AS occupied, " +
+                "(SELECT COUNT(*) FROM affected_person) AS occupied, " +
                 "(SELECT COUNT(*) FROM affected_person) AS people, " +
                 "(SELECT COUNT(*) FROM emergency_request WHERE status='PENDING') AS pending, " +
                 "(SELECT COUNT(*) FROM emergency_request WHERE status='PENDING' AND urgency='CRITICAL') AS critical, " +
                 "(SELECT COUNT(*) FROM resource WHERE quantity < 50) AS lowstock").get(0));
 
             req.setAttribute("shelterList", DBConnection.query(con,
-                "SELECT s.shelter_id, s.name, s.capacity, s.occupancy, " +
-                "ROUND(s.occupancy*100/s.capacity) AS pct, COUNT(p.person_id) AS registered " +
+                "SELECT s.shelter_id, s.name, s.capacity, COUNT(p.person_id) AS occupancy, " +
+                "ROUND(COUNT(p.person_id)*100/NULLIF(s.capacity,0)) AS pct, " +
+                "COUNT(p.person_id) AS registered " +
                 "FROM shelter s LEFT JOIN affected_person p ON s.shelter_id = p.shelter_id " +
-                "GROUP BY s.shelter_id, s.name, s.capacity, s.occupancy ORDER BY s.shelter_id"));
+                "GROUP BY s.shelter_id, s.name, s.capacity ORDER BY s.shelter_id"));
 
             req.setAttribute("topRequests", DBConnection.query(con,
                 "SELECT r.request_id, s.name AS shelter, res.name AS resource, r.quantity_needed, r.urgency " +

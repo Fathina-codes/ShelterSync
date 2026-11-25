@@ -1,11 +1,21 @@
 package com.sheltersync;
 
 import java.io.IOException;
-import java.sql.*;
-import java.util.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
-import javax.servlet.http.*;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 
 @WebServlet("/shelters")
 public class ShelterServlet extends HttpServlet {
@@ -46,9 +56,21 @@ public class ShelterServlet extends HttpServlet {
             }
 
             // LIST
+            try (Statement st = con.createStatement()) {
+                st.executeUpdate(
+                        "UPDATE shelter s SET occupancy = " +
+                        "(SELECT COUNT(*) FROM affected_person p WHERE p.shelter_id = s.shelter_id)");
+            }
+
             List<Map<String, Object>> list = new ArrayList<>();
             try (Statement st = con.createStatement();
-                 ResultSet rs = st.executeQuery("SELECT * FROM shelter")) {
+                 ResultSet rs = st.executeQuery(
+                         "SELECT s.shelter_id, s.name, s.location, s.capacity, " +
+                         "COUNT(p.person_id) AS occupancy, " +
+                         "s.capacity - COUNT(p.person_id) AS available " +
+                         "FROM shelter s LEFT JOIN affected_person p ON s.shelter_id = p.shelter_id " +
+                         "GROUP BY s.shelter_id, s.name, s.location, s.capacity " +
+                         "ORDER BY s.shelter_id")) {
                 while (rs.next()) {
                     Map<String, Object> m = new HashMap<>();
                     m.put("id", rs.getInt("shelter_id"));
@@ -56,7 +78,7 @@ public class ShelterServlet extends HttpServlet {
                     m.put("location", rs.getString("location"));
                     m.put("capacity", rs.getInt("capacity"));
                     m.put("occupancy", rs.getInt("occupancy"));
-                    m.put("available", rs.getInt("capacity") - rs.getInt("occupancy"));
+                    m.put("available", rs.getInt("available"));
                     list.add(m);
                 }
             }
